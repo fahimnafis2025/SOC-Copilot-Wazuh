@@ -23,7 +23,7 @@
 
 1. Read the full guide first:
    - `Lab12_Agentic_SOC_Platform_Guide_v2.docx`
-   - Place the guide in the root of this repository before publishing.
+  
 2. Download and deploy the two required files:
    - `custom-asp` - Wazuh integration script that pushes alerts to ASP.
    - `wazuh_alerts_module.py` - ASP custom Module that creates Cases, Alerts, Artifacts, and schedules Gemini analysis.
