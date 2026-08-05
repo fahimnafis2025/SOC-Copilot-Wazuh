@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+import sys, json, ssl, urllib.request, datetime
+
+LOG = "/var/ossec/logs/integrations.log"
+STREAM_NAME = "Wazuh-Alerts"
+
+def log(msg):
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with open(LOG, "a") as f:
+            f.write("%s custom-asp: %s\n" % (ts, msg))
+    except Exception:
+        pass
+
+def sev(level):
+    try:
+        lvl = int(level)
+    except Exception:
+        return "Low"
+    if lvl >= 12:
+        return "Critical"
+    if lvl >= 8:
+        return "High"
+    if lvl >= 5:
+        return "Medium"
+    return "Low"
+
+def main():
+    if len(sys.argv) < 4:
+        log("ERROR missing args (need alert_file, api_key, hook_url)")
+        sys.exit(1)
+
+    alert_file, api_key, hook_url = sys.argv[1], sys.argv[2], sys.argv[3]
+
+    try:
+        with open(alert_file, "r") as f:
+            alert = json.load(f)
+    except Exception as e:
+        log("ERROR reading alert file: %s" % e)
+        sys.exit(1)
+
+    rule = alert.get("rule", {}) or {}
+    agent = alert.get("agent", {}) or {}
+    data = alert.get("data", {}) or {}
+
+    ips = [v for v in [data.get("srcip"), data.get("dstip")] if v]
+    user = data.get("srcuser") or data.get("dstuser") or data.get("user")
+
+    source = {
+        "alert_name": rule.get("description", "Wazuh Alert"),
+        "alert_id": alert.get("id", ""),
+        "timestamp": alert.get("timestamp", datetime.datetime.now(datetime.timezone.utc).isoformat()),
+        "severity": sev(rule.get("level")),
+        "source": "Wazuh",
+        "host": agent.get("name", agent.get("id", "unknown")),
+        "user": user or "",
+        "description": rule.get("description", "") + " | " + str(alert.get("full_log", ""))[:500],
+        "raw_event": alert,
+        "indicators": {"ip_addresses": ips, "domains": [], "file_hashes": []},
+        "rule_id": rule.get("id", ""),
+        "rule_level": rule.get("level", ""),
+        "mitre": rule.get("mitre", {}),
+    }
+
+    envelope = {
+        "rule": {"name": STREAM_NAME},
+        "context": {"hits": [{"_source": source}]},
+    }
+
+    body = json.dumps(envelope).encode("utf-8")
+    req = urllib.request.Request(hook_url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    if api_key:
+        req.add_header("Authorization", "Bearer " + api_key)
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+            log("SENT %s -> %s HTTP %s" % (source["alert_name"], hook_url, resp.getcode()))
+    except urllib.error.HTTPError as e:
+        log("HTTPError %s from %s : %s" % (e.code, hook_url, e.read()[:300]))
+        sys.exit(1)
+    except Exception as e:
+        log("SEND FAILED to %s : %s" % (hook_url, e))
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
